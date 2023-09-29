@@ -7,11 +7,12 @@ Consult the [CONTRIBUTING](../blob/main/CONTRIBUTING.md#contributing-via-pull-re
 ## Motivation
 
 <!-- Why are you submitting this pull request? -->
-- Resolves #<user-story-number>
+- Resolves #<issue-number>
 
 ### Checklist
 
-- [ ] Yes, [pre-commit hooks](../blob/main/CONTRIBUTING.md#execute-pre-commit-hooks-manually-on-all-files) have been executed successfully.
+- [ ] Yes, I have updated the documentation for this change.
+- [ ] Yes, [pre-commit hooks](../../blob/main/CONTRIBUTING.md#execute-pre-commit-hooks-manually-on-all-files) have been executed successfully.
 
 ## Additional Notes
 
