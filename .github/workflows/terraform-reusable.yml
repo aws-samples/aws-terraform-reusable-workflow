@@ -30,6 +30,9 @@ on:
       environment:
         required: true
         type: string
+      ref:
+        required: true
+        type: string
       local-execution-mode:
         required: false
         type: boolean
@@ -73,10 +76,16 @@ jobs:
       exitcode: ${{ steps.plan.outputs.exitcode }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+      - name: Checkout composite actions
+        uses: actions/checkout@v4
+        with:
+          repository: aws-samples/aws-terraform-reusable-workflow
+          ref: ${{ inputs.ref }}
+          path: composite
       - name: Terraform Init
         id: init
-        uses: aws-samples/aws-terraform-reusable-workflow/.github/actions/terraform-init@main
+        uses: ./composite/.github/actions/terraform-init
         with:
           tf-version: ${{ inputs.tf-version }}
           aws-region: ${{ inputs.aws-region }}
@@ -87,7 +96,7 @@ jobs:
           python-version: ${{ inputs.python-version }}
       - name: Terraform Plan
         id: plan
-        uses: aws-samples/aws-terraform-reusable-workflow/.github/actions/terraform-plan@main
+        uses: ./composite/.github/actions/terraform-plan
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           deploy: ${{ inputs.deploy }}
@@ -104,10 +113,16 @@ jobs:
       name: ${{ inputs.environment }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+      - name: Checkout composite actions
+        uses: actions/checkout@v4
+        with:
+          repository: aws-samples/aws-terraform-reusable-workflow
+          ref: ${{ inputs.ref }}
+          path: composite
       - name: Terraform Init
         id: init
-        uses: aws-samples/aws-terraform-reusable-workflow/.github/actions/terraform-init@main
+        uses: ./composite/.github/actions/terraform-init
         with:
           tf-version: ${{ inputs.tf-version }}
           aws-region: ${{ inputs.aws-region }}
