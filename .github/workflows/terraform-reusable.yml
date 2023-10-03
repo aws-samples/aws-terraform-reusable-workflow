@@ -74,6 +74,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+        with:
+          repository: aws-samples/aws-terraform-reusable-workflow
       - name: Terraform Init
         id: init
         uses: ./.github/actions/terraform-init
@@ -105,6 +107,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+        with:
+          repository: aws-samples/aws-terraform-reusable-workflow
       - name: Terraform Init
         id: init
         uses: ./.github/actions/terraform-init
