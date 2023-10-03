@@ -30,6 +30,9 @@ on:
       environment:
         required: true
         type: string
+      ref:
+        required: true
+        type: string
       local-execution-mode:
         required: false
         type: boolean
@@ -78,6 +81,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aws-samples/aws-terraform-reusable-workflow
+          ref: ${{ inputs.ref }}
           path: composite
       - name: Terraform Init
         id: init
@@ -114,6 +118,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aws-samples/aws-terraform-reusable-workflow
+          ref: ${{ inputs.ref }}
           path: composite
       - name: Terraform Init
         id: init
