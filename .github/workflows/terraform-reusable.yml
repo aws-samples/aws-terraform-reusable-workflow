@@ -81,7 +81,7 @@ jobs:
           path: composite
       - name: Terraform Init
         id: init
-        uses: ./.github/actions/terraform-init
+        uses: ./composite/.github/actions/terraform-init
         with:
           tf-version: ${{ inputs.tf-version }}
           aws-region: ${{ inputs.aws-region }}
@@ -92,7 +92,7 @@ jobs:
           python-version: ${{ inputs.python-version }}
       - name: Terraform Plan
         id: plan
-        uses: ./.github/actions/terraform-plan
+        uses: ./composite/.github/actions/terraform-plan
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           deploy: ${{ inputs.deploy }}
@@ -117,7 +117,7 @@ jobs:
           path: composite
       - name: Terraform Init
         id: init
-        uses: ./.github/actions/terraform-init
+        uses: ./composite/.github/actions/terraform-init
         with:
           tf-version: ${{ inputs.tf-version }}
           aws-region: ${{ inputs.aws-region }}
