@@ -73,9 +73,9 @@ jobs:
       exitcode: ${{ steps.plan.outputs.exitcode }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Checkout composite actions
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: aws-samples/aws-terraform-reusable-workflow
           path: composite
@@ -109,9 +109,9 @@ jobs:
       name: ${{ inputs.environment }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Checkout composite actions
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: aws-samples/aws-terraform-reusable-workflow
           path: composite
