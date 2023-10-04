@@ -104,11 +104,11 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - environment: DEV-US-EAST-2
-            region: us-east-2
-          - environment: TST-US-EAST-2
-            region: us-east-2
-          - environment: PRD-US-EAST-2
+          - environment: dev
+            region: us-east-1
+          - environment: test
+            region: us-west-2
+          - environment: prod
             region: us-east-2
     with:
       deploy: true
@@ -148,11 +148,11 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - environment: DEV-US-EAST-2
-            region: us-east-2
-          - environment: TST-US-EAST-2
-            region: us-east-2
-          - environment: PRD-US-EAST-2
+          - environment: dev
+            region: us-east-1
+          - environment: test
+            region: us-west-2
+          - environment: prod
             region: us-east-2
     with:
       deploy: false
@@ -224,9 +224,9 @@ jobs:
       tf-version: ${{ vars.TF_VERSION }}
       tf-organization: ${{ vars.TF_ORGANIZATION }}
       tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-DEV-US-EAST-2
-      aws-region: "us-east-2"
-      environment: "DEV-US-EAST-2"
+      tf-workspace: ${{ vars.APP_NAME }}-dev
+      aws-region: "us-east-1"
+      environment: "dev"
       ref: v1.1.0
       local-execution-mode: true
       setup-python: true
@@ -245,9 +245,9 @@ jobs:
       tf-version: ${{ vars.TF_VERSION }}
       tf-organization: ${{ vars.TF_ORGANIZATION }}
       tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-PRD-US-EAST-2
+      tf-workspace: ${{ vars.APP_NAME }}-prod
       aws-region: "us-east-2"
-      environment: "PRD-US-EAST-2"
+      environment: "prod"
       ref: v1.1.0
       local-execution-mode: true
       setup-python: true
@@ -288,9 +288,9 @@ jobs:
       tf-version: ${{ vars.TF_VERSION }}
       tf-organization: ${{ vars.TF_ORGANIZATION }}
       tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-DEV-US-EAST-2
+      tf-workspace: ${{ vars.APP_NAME }}-dev
       aws-region: "us-east-1"
-      environment: "DEV-US-EAST-2"
+      environment: "dev"
       ref: v1.1.0
       local-execution-mode: true
       setup-python: true
@@ -309,9 +309,9 @@ jobs:
       tf-version: ${{ vars.TF_VERSION }}
       tf-organization: ${{ vars.TF_ORGANIZATION }}
       tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-PRD-US-EAST-2
-      aws-region: "us-east-1"
-      environment: "PRD-US-EAST-2"
+      tf-workspace: ${{ vars.APP_NAME }}-prod
+      aws-region: "us-east-2"
+      environment: "prod"
       ref: v1.1.0
       local-execution-mode: true
       setup-python: true
