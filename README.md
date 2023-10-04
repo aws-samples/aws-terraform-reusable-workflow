@@ -98,17 +98,17 @@ concurrency:
 jobs:
   deploy:
     name: Progressive Deployment
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@main
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.1.0
     strategy:
       max-parallel: 1
       fail-fast: true
       matrix:
         include:
-          - environment: DEV-US-EAST-2
-            region: us-east-2
-          - environment: TST-US-EAST-2
-            region: us-east-2
-          - environment: PRD-US-EAST-2
+          - environment: dev
+            region: us-east-1
+          - environment: test
+            region: us-west-2
+          - environment: prod
             region: us-east-2
     with:
       deploy: true
@@ -118,6 +118,7 @@ jobs:
       tf-workspace: ${{ vars.APP_NAME }}-${{ matrix.environment }}
       aws-region: ${{ matrix.region }}
       environment: ${{ matrix.environment }}
+      ref: v1.1.0
     secrets:
       tf-token: ${{ secrets.TF_TOKEN }}
 ```
@@ -141,17 +142,17 @@ on:
 jobs:
   destroy:
     name: Progressive Destroy
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@main
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.1.0
     strategy:
       max-parallel: 1
       fail-fast: true
       matrix:
         include:
-          - environment: DEV-US-EAST-2
-            region: us-east-2
-          - environment: TST-US-EAST-2
-            region: us-east-2
-          - environment: PRD-US-EAST-2
+          - environment: dev
+            region: us-east-1
+          - environment: test
+            region: us-west-2
+          - environment: prod
             region: us-east-2
     with:
       deploy: false
@@ -161,6 +162,7 @@ jobs:
       tf-workspace: FI-AWSCE-${{ vars.APP_NAME }}-${{ matrix.environment }}
       aws-region: ${{ matrix.region }}
       environment: ${{ matrix.environment }}
+      ref: v1.1.0
     secrets:
       tf-token: ${{ secrets.TF_TOKEN }}
 ```
@@ -216,15 +218,16 @@ concurrency:
 jobs:
   deploy-dev:
     name: Dev Deployment
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@main
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.1.0
     with:
       deploy: true
       tf-version: ${{ vars.TF_VERSION }}
       tf-organization: ${{ vars.TF_ORGANIZATION }}
       tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-DEV-US-EAST-2
-      aws-region: "us-east-2"
-      environment: "DEV-US-EAST-2"
+      tf-workspace: ${{ vars.APP_NAME }}-dev
+      aws-region: "us-east-1"
+      environment: "dev"
+      ref: v1.1.0
       local-execution-mode: true
       setup-python: true
       python-version: "3.11"
@@ -236,15 +239,16 @@ jobs:
   deploy-prod:
     needs: deploy-dev
     name: Prod Deployment
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@main
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.1.0
     with:
       deploy: true
       tf-version: ${{ vars.TF_VERSION }}
       tf-organization: ${{ vars.TF_ORGANIZATION }}
       tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-PRD-US-EAST-2
+      tf-workspace: ${{ vars.APP_NAME }}-prod
       aws-region: "us-east-2"
-      environment: "PRD-US-EAST-2"
+      environment: "prod"
+      ref: v1.1.0
       local-execution-mode: true
       setup-python: true
       python-version: "3.11"
@@ -278,15 +282,16 @@ concurrency:
 jobs:
   destroy-dev:
     name: Dev Destroy
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@main
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.1.0
     with:
       deploy: false
       tf-version: ${{ vars.TF_VERSION }}
       tf-organization: ${{ vars.TF_ORGANIZATION }}
       tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-DEV-US-EAST-2
+      tf-workspace: ${{ vars.APP_NAME }}-dev
       aws-region: "us-east-1"
-      environment: "DEV-US-EAST-2"
+      environment: "dev"
+      ref: v1.1.0
       local-execution-mode: true
       setup-python: true
       python-version: "3.10"
@@ -298,15 +303,16 @@ jobs:
   destroy-prod:
     needs: destroy-dev
     name: Prod Destroy
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@main
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.1.0
     with:
       deploy: false
       tf-version: ${{ vars.TF_VERSION }}
       tf-organization: ${{ vars.TF_ORGANIZATION }}
       tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-PRD-US-EAST-2
-      aws-region: "us-east-1"
-      environment: "PRD-US-EAST-2"
+      tf-workspace: ${{ vars.APP_NAME }}-prod
+      aws-region: "us-east-2"
+      environment: "prod"
+      ref: v1.1.0
       local-execution-mode: true
       setup-python: true
       python-version: "3.10"
