@@ -47,7 +47,7 @@ If a Terraform configuration is using providers or modules that require binaries
     - `TF_ORGANIZATION`
     - `TF_VERSION`
   - Environments
-    > Use the *`ENV-REGION`* format for environment names (e.g., `DEV-US-EAST-2`)
+    > Use the *`env`* format for environment names (e.g., `dev`,`test`,`prod`)
   - (Optional) If not using Terraform Cloud, update `TF_TOKEN_app_terraform_io` environment variable in [terraform-reusable.yml](./.github/workflows/terraform-reusable.yml#L64) to use your Terraform Enterprise endpoint hostname, replacing any periods with underscores. Refer to [Running Terraform in automation](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform#terraform-cloud) for more information.
 
 ### Remote/Agent Execution mode configuration
