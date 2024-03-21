@@ -30,12 +30,12 @@ runs:
   using: "composite"
   steps:
     - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v2
+      uses: hashicorp/setup-terraform@v3
       with:
         terraform_version: ${{ inputs.tf-version }}
         terraform_wrapper: ${{ inputs.terraform-wrapper }}
     - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v2
+      uses: aws-actions/configure-aws-credentials@v4
       if: ${{ inputs.local-execution-mode == 'true' }}
       with:
         role-to-assume: ${{ inputs.terraform-execution-iam-role-arn }}
