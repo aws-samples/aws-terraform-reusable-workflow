@@ -16,14 +16,17 @@ on:
         required: true
         type: string
       tf-organization:
-        required: true
+        required: false
         type: string
+        description: "Terraform Cloud/Enterprise organization name"
       tf-hostname:
-        required: true
+        required: false
         type: string
+        description: "Terraform Cloud/Enterprise hostname"
       tf-workspace:
-        required: true
+        required: false
         type: string
+        description: "Terraform Cloud/Enterprise workspace name"
       aws-region:
         required: true
         type: string
@@ -42,15 +45,26 @@ on:
       python-version:
         required: false
         type: string
+      # New input for GitHub module sourcing
+      enable-github-modules:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable sourcing modules from GitHub repositories"
     secrets:
       tf-token:
-        required: true
+        required: false
+        description: "Terraform Cloud/Enterprise API token"
       terraform-execution-iam-plan-role-arn:
         required: false
       terraform-execution-iam-apply-role-arn:
         required: false
       extra-args:
         required: false
+      # New secret for GitHub module sourcing
+      github-token:
+        required: false
+        description: "GitHub Personal Access Token for accessing private repositories"
 
 concurrency:
   group: ${{ inputs.environment }}
@@ -94,6 +108,8 @@ jobs:
           terraform-execution-iam-role-arn: ${{ secrets.terraform-execution-iam-plan-role-arn }}
           setup-python: ${{ inputs.setup-python }}
           python-version: ${{ inputs.python-version }}
+          enable-github-modules: ${{ inputs.enable-github-modules }}
+          github-token: ${{ secrets.github-token }}
       - name: Terraform Plan
         id: plan
         uses: ./composite/.github/actions/terraform-plan
@@ -131,6 +147,8 @@ jobs:
           terraform-execution-iam-role-arn: ${{ secrets.terraform-execution-iam-apply-role-arn }}
           setup-python: ${{ inputs.setup-python }}
           python-version: ${{ inputs.python-version }}
+          enable-github-modules: ${{ inputs.enable-github-modules }}
+          github-token: ${{ secrets.github-token }}
       - name: Define Terraform Apply Command # 'terraform apply' or 'terraform destroy'
         id: tf_apply_command
         run: |

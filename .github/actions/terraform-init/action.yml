@@ -22,6 +22,13 @@ inputs:
   python-version:
     required: false
     description: "Python Version"
+  enable-github-modules:
+    required: false
+    description: "Enable sourcing modules from GitHub repositories"
+    default: "false"
+  github-token:
+    required: false
+    description: "GitHub Personal Access Token for accessing private repositories"
 outputs:
   outcome:
     description: "Terraform init command outcome"
@@ -47,6 +54,11 @@ runs:
       if: ${{ inputs.setup-python == 'true' }}
       with:
         python-version: ${{ inputs.python-version }}
+    - name: Setup GitHub Authentication
+      if: ${{ inputs.enable-github-modules == 'true' && inputs.github-token != '' }}
+      uses: ./.github/actions/github-auth
+      with:
+        github-token: ${{ inputs.github-token }}
     - name: Terraform Init
       id: init
       shell: bash

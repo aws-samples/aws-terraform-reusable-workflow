@@ -18,6 +18,13 @@ This repository provides a GitHub Actions reusable workflow that manages infrast
       - [GitHub Repository](#github-repository)
       - [Sequential Deploy workflow](#sequential-deploy-workflow)
       - [Optional Sequential Destroy workflow](#optional-sequential-destroy-workflow)
+    - [GitHub Module Sourcing](#github-module-sourcing)
+      - [Configuration](#configuration)
+      - [Module References](#module-references)
+      - [Security Considerations](#security-considerations)
+    - [S3 Backend Configuration](#s3-backend-configuration)
+      - [Configuration](#configuration-1)
+      - [Security Considerations](#security-considerations-1)
   - [Security](#security)
   - [License](#license)
 
@@ -25,7 +32,7 @@ This repository provides a GitHub Actions reusable workflow that manages infrast
 
 ## Usage
 
-This section provides the steps required to call this reusable workflow from another repository in order to test and deploy AWS resources with Terraform in multiple accounts. The workflow provided in this repository supports both Terraform Cloud/Enterprise Remote/Agent and Local [Execution Modes](https://developer.hashicorp.com/terraform/cloud-docs/workspaces/settings#execution-mode).
+This section provides the steps required to call this reusable workflow from another repository in order to test and deploy AWS resources with Terraform in multiple accounts. The workflow provided in this repository supports both Terraform Cloud/Enterprise Remote/Agent and Local [Execution Modes](https://developer.hashicorp.com/terraform/cloud-docs/workspaces/settings#execution-mode) as well as S3 backend.
 
 ### Determine the Workspace Execution Mode
 
@@ -36,19 +43,25 @@ If a Terraform configuration is using providers or modules that require binaries
 ### Prerequisites
 
 - AWS Account for each environment where you want to test and deploy AWS resources
+- GitHub Repository with the following configuration:
+  - Environments
+    > Use the *`env`* format for environment names (e.g., `dev`,`test`,`prod`)
+
+For Terraform Cloud/Enterprise:
 - Terraform Cloud/Enterprise organization
 - Terraform Cloud/Enterprise workspace using the CLI-driven workflow type for each AWS account
 - Terraform Cloud/Enterprise user or team token that can access all the workspaces
-- GitHub Repository with the following configuration:
-  - `TF_TOKEN` repository secret
-  - Repository variables:
-    - `APP_NAME`
-    - `TF_HOSTNAME`
-    - `TF_ORGANIZATION`
-    - `TF_VERSION`
-  - Environments
-    > Use the *`env`* format for environment names (e.g., `dev`,`test`,`prod`)
-  - (Optional) If not using Terraform Cloud, update `TF_TOKEN_app_terraform_io` environment variable in [terraform-reusable.yml](./.github/workflows/terraform-reusable.yml#L64) to use your Terraform Enterprise endpoint hostname, replacing any periods with underscores. Refer to [Running Terraform in automation](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform#terraform-cloud) for more information.
+- `TF_TOKEN` repository secret
+- Repository variables:
+  - `TF_HOSTNAME`
+  - `TF_ORGANIZATION`
+  - `APP_NAME` (for workspace naming)
+  - `TF_VERSION`
+- (Optional) If not using Terraform Cloud, update `TF_TOKEN_app_terraform_io` environment variable in [terraform-reusable.yml](./.github/workflows/terraform-reusable.yml#L64) to use your Terraform Enterprise endpoint hostname, replacing any periods with underscores. Refer to [Running Terraform in automation](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform#terraform-cloud) for more information.
+
+For S3 backend:
+- S3 bucket for Terraform state storage
+- Appropriate IAM permissions for accessing the S3 bucket
 
 ### Remote/Agent Execution mode configuration
 
@@ -222,9 +235,6 @@ jobs:
     with:
       deploy: true
       tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-dev
       aws-region: "us-east-1"
       environment: "dev"
       ref: v1.2.0
@@ -232,7 +242,6 @@ jobs:
       setup-python: true
       python-version: "3.11"
     secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
       terraform-execution-iam-plan-role-arn: ${{ secrets.DEV_AWS_PLAN_ROLE_ARN }}
       terraform-execution-iam-apply-role-arn: ${{ secrets.DEV_AWS_APPLY_ROLE_ARN }}
       extra-args: ${{ secrets.DEV_EXTRA_ARGS }}
@@ -243,9 +252,6 @@ jobs:
     with:
       deploy: true
       tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-prod
       aws-region: "us-east-2"
       environment: "prod"
       ref: v1.2.0
@@ -253,7 +259,6 @@ jobs:
       setup-python: true
       python-version: "3.11"
     secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
       terraform-execution-iam-plan-role-arn: ${{ secrets.PROD_AWS_PLAN_ROLE_ARN }}
       terraform-execution-iam-apply-role-arn: ${{ secrets.PROD_AWS_APPLY_ROLE_ARN }}
       extra-args: ${{ secrets.PROD_EXTRA_ARGS }}
@@ -286,9 +291,6 @@ jobs:
     with:
       deploy: false
       tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-dev
       aws-region: "us-east-1"
       environment: "dev"
       ref: v1.2.0
@@ -296,7 +298,6 @@ jobs:
       setup-python: true
       python-version: "3.10"
     secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
       terraform-execution-iam-plan-role-arn: ${{ secrets.DEV_AWS_PLAN_ROLE_ARN }}
       terraform-execution-iam-apply-role-arn: ${{ secrets.DEV_AWS_APPLY_ROLE_ARN }}
       extra-args: ${{ secrets.DEV_EXTRA_ARGS }}
@@ -307,9 +308,6 @@ jobs:
     with:
       deploy: false
       tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-prod
       aws-region: "us-east-2"
       environment: "prod"
       ref: v1.2.0
@@ -317,11 +315,83 @@ jobs:
       setup-python: true
       python-version: "3.10"
     secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
       terraform-execution-iam-plan-role-arn: ${{ secrets.PROD_AWS_PLAN_ROLE_ARN }}
       terraform-execution-iam-apply-role-arn: ${{ secrets.PROD_AWS_APPLY_ROLE_ARN }}
       extra-args: ${{ secrets.PROD_EXTRA_ARGS }}
 ```
+
+### GitHub Module Sourcing
+
+This workflow supports sourcing Terraform modules directly from GitHub repositories, including private repositories that require authentication.
+
+#### Configuration
+
+To enable GitHub module sourcing, add the following inputs to your workflow:
+
+```yaml
+with:
+  enable-github-modules: true
+secrets:
+  github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+#### Module References
+
+When using GitHub module sourcing, you can reference modules in your Terraform configuration using the following syntax:
+
+```hcl
+module "example" {
+  source = "github.com/organization/repository//path/to/module?ref=v1.0.0"
+}
+```
+
+#### Security Considerations
+
+- Use a GitHub Personal Access Token with the minimum required permissions
+- Store the token securely in GitHub Secrets
+- Consider using fine-grained PATs with repository-specific access
+- Rotate tokens regularly according to your security policies
+
+### S3 Backend Configuration
+
+This workflow supports using S3 as a backend for Terraform state management as an alternative to Terraform Cloud/Enterprise. The S3 backend configuration should be defined in your Terraform code.
+
+#### Configuration
+
+To use the S3 backend, add the backend configuration to your Terraform code:
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket         = "my-terraform-state-bucket"
+    key            = "path/to/my/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    # Enable state locking with a local lock file
+    use_lock_file = true
+  }
+}
+```
+
+When using S3 backend, you don't need to provide the Terraform Cloud/Enterprise parameters:
+
+```yaml
+with:
+  deploy: true
+  tf-version: "1.5.0"
+  aws-region: "us-east-1"
+  environment: "dev"
+  ref: v1.2.0
+  local-execution-mode: true
+```
+
+#### Security Considerations
+
+- Ensure the S3 bucket has appropriate access controls
+- Enable versioning on the S3 bucket to protect against accidental state loss
+- Use encryption for the state file
+- Configure appropriate IAM permissions for accessing the S3 bucket
+- Enable local locking with `use_lock_file = true` for CI/CD environments
 
 ## Security
 

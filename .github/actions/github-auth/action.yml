@@ -1,0 +1,48 @@
+name: 'GitHub Authentication'
+description: 'Configure Git to use GitHub PAT for module sourcing'
+
+inputs:
+  github-token:
+    required: true
+    description: 'GitHub Personal Access Token'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup GitHub Authentication
+      if: ${{ inputs.github-token != '' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        echo "Setting up GitHub authentication..."
+
+        # Validate token is provided
+        if [ -z "${GITHUB_TOKEN}" ]; then
+          echo "Error: GitHub token is not set."
+          exit 1
+        fi
+
+        # Configure Git to use the token for GitHub URLs
+        echo "Configuring Git to use GitHub token..."
+        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        if [ $? -ne 0 ]; then
+          echo "Error: Failed to configure Git to use GitHub token."
+          exit 1
+        fi
+        echo "Git configured to use GitHub token successfully."
+
+        # Authenticate with GitHub CLI if available
+        if command -v gh &> /dev/null; then
+          echo "Authenticating with GitHub CLI..."
+          echo "${GITHUB_TOKEN}" | gh auth login --with-token
+          if [ $? -ne 0 ]; then
+            echo "Warning: Failed to authenticate with GitHub CLI. This is not critical if you're not using GitHub CLI commands."
+          else
+            echo "Authenticated with GitHub CLI successfully."
+          fi
+        fi
+
+        # Set environment variables for Terraform
+        echo "Setting up environment variables for Terraform..."
+        echo "TF_CLI_CONFIG_FILE=${HOME}/.terraformrc" >> $GITHUB_ENV
