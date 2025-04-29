@@ -74,14 +74,6 @@ defaults:
   run:
     shell: bash
 
-env:
-  TF_CLOUD_ORGANIZATION: ${{ inputs.tf-organization}}
-  TF_CLOUD_HOSTNAME: ${{ inputs.tf-hostname }}
-  TF_WORKSPACE: ${{ inputs.tf-workspace }}
-  # For Terraform Enterprise, change the domain name in the TF_TOKEN_app_terraform_io variable
-  # like documented in https://developer.hashicorp.com/terraform/cli/config/config-file#environment-variable-credentials
-  TF_TOKEN_app_terraform_io: ${{ secrets.tf-token }}
-
 jobs:
   terraform-plan:
     name: Terraform Plan
@@ -97,6 +89,14 @@ jobs:
           repository: aws-samples/aws-terraform-reusable-workflow
           ref: ${{ inputs.ref }}
           path: composite
+      # Set TF_* environment variables only if TFC/TFE is used
+      - name: Set Terraform Cloud/Enterprise Environment Variables
+        if: ${{ inputs.tf-organization != '' && inputs.tf-hostname != '' && inputs.tf-workspace != '' }}
+        run: |
+          echo "TF_CLOUD_ORGANIZATION=${{ inputs.tf-organization }}" >> $GITHUB_ENV
+          echo "TF_CLOUD_HOSTNAME=${{ inputs.tf-hostname }}" >> $GITHUB_ENV
+          echo "TF_WORKSPACE=${{ inputs.tf-workspace }}" >> $GITHUB_ENV
+          echo "TF_TOKEN_app_terraform_io=${{ secrets.tf-token }}" >> $GITHUB_ENV
       - name: Terraform Init
         id: init
         uses: ./composite/.github/actions/terraform-init
@@ -136,6 +136,14 @@ jobs:
           repository: aws-samples/aws-terraform-reusable-workflow
           ref: ${{ inputs.ref }}
           path: composite
+      # Set TF_* environment variables only if TFC/TFE is used
+      - name: Set Terraform Cloud/Enterprise Environment Variables
+        if: ${{ inputs.tf-organization != '' && inputs.tf-hostname != '' && inputs.tf-workspace != '' }}
+        run: |
+          echo "TF_CLOUD_ORGANIZATION=${{ inputs.tf-organization }}" >> $GITHUB_ENV
+          echo "TF_CLOUD_HOSTNAME=${{ inputs.tf-hostname }}" >> $GITHUB_ENV
+          echo "TF_WORKSPACE=${{ inputs.tf-workspace }}" >> $GITHUB_ENV
+          echo "TF_TOKEN_app_terraform_io=${{ secrets.tf-token }}" >> $GITHUB_ENV
       - name: Terraform Init
         id: init
         uses: ./composite/.github/actions/terraform-init
