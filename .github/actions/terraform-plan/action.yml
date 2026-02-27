@@ -64,7 +64,7 @@ runs:
           -input=false \
           ${{ inputs.extra-args }} | tee plan.out
     - name: Comment Pull Request
-      uses: actions/github-script@v6
+      uses: actions/github-script@v8
       if: github.event_name == 'pull_request'
       with:
         github-token: ${{ inputs.github-token }}

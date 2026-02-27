@@ -24,7 +24,7 @@ If applicable, add screenshots to help explain your problem.
 
 **Desktop (please complete the following information):**
  - OS: [e.g. Linux]
- - Terraform Version [e.g. 1.3.6]
+ - Terraform Version [e.g. 1.14.6]
 
 **Additional context**
 Add any other context about the problem here.
