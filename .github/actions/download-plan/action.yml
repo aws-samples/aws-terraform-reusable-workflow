@@ -1,0 +1,28 @@
+name: "Download Terraform Plan"
+description: "Downloads and decrypts the saved plan that the plan job uploaded."
+inputs:
+  artifact-name:
+    required: true
+    description: "Name of the saved plan artifact"
+  plan-encryption-key:
+    required: true
+    description: "Passphrase that encrypted the saved plan"
+outputs:
+  plan-file:
+    description: "Path to the decrypted saved plan"
+    value: ${{ runner.temp }}/tfplan
+runs:
+  using: "composite"
+  steps:
+    - name: Download saved plan
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/tfplan-artifact
+    - name: Decrypt saved plan
+      shell: bash
+      env:
+        PLAN_ENCRYPTION_KEY: ${{ inputs.plan-encryption-key }}
+        BUNDLE_FILE: ${{ runner.temp }}/tfplan-artifact/tfplan.tgz.gpg
+        PLAN_FILE: ${{ runner.temp }}/tfplan
+      run: bash "$GITHUB_ACTION_PATH/unpack.sh"

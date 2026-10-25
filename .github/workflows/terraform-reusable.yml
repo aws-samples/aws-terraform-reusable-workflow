@@ -1,59 +1,111 @@
 name: Terraform Reusable
 
-permissions:
-  id-token: write # This is required for requesting the JWT
-  contents: read # This is required for actions/checkout
-  pull-requests: write # This is required to add comments to Pull Requests
-  deployments: write # This is required to deactivate deployments
-
 on:
   workflow_call:
     inputs:
-      deploy: # true = 'terraform apply' false = 'terraform destroy'
+      deploy:
+        description: "true plans and applies the configuration. false plans and applies a destroy."
         required: true
         type: boolean
       tf-version:
-        required: true
-        type: string
-      tf-organization:
-        required: true
-        type: string
-      tf-hostname:
-        required: true
-        type: string
-      tf-workspace:
+        description: "Terraform version, for example 1.17.0"
         required: true
         type: string
       aws-region:
+        description: "AWS Region, passed to the configuration as var.region"
         required: true
         type: string
       environment:
+        description: "GitHub environment name. Selects envs/<environment>/terraform.tfvars and is passed as var.environment."
         required: true
         type: string
       ref:
-        required: true
+        description: "Deprecated and ignored. The composite actions load from the same commit as this workflow."
+        required: false
         type: string
+        default: ""
+      apply-branch:
+        description: "Branch whose pushes and manual runs apply the plan"
+        required: false
+        type: string
+        default: main
+      tf-organization:
+        description: "HCP Terraform or Terraform Enterprise organization. Leave empty for the S3 backend."
+        required: false
+        type: string
+        default: ""
+      tf-hostname:
+        description: "HCP Terraform or Terraform Enterprise hostname"
+        required: false
+        type: string
+        default: app.terraform.io
+      tf-workspace:
+        description: "HCP Terraform or Terraform Enterprise workspace. Required with tf-organization."
+        required: false
+        type: string
+        default: ""
       local-execution-mode:
+        description: "Deprecated and ignored. AWS credentials are configured whenever a role ARN secret is set."
         required: false
         type: boolean
+        default: false
       setup-python:
+        description: "Install Python, for providers or modules that need it"
         required: false
         type: boolean
+        default: false
       python-version:
+        description: "Python version to install"
         required: false
         type: string
+        default: "3.13"
+      enable-github-modules:
+        description: "Configure Git to download private modules from GitHub with the github-token secret"
+        required: false
+        type: boolean
+        default: false
+      pr-comment:
+        description: "Post the plan as a pull request comment"
+        required: false
+        type: boolean
+        default: true
+      run-terraform-test:
+        description: "Run terraform test with the plan role before the plan"
+        required: false
+        type: boolean
+        default: false
+      role-duration-seconds:
+        description: "Session duration for the assumed IAM roles. Can't exceed the role's maximum session duration."
+        required: false
+        type: number
+        default: 3600
     secrets:
-      tf-token:
-        required: true
       terraform-execution-iam-plan-role-arn:
+        description: "IAM role that the plan job assumes through GitHub OIDC"
         required: false
       terraform-execution-iam-apply-role-arn:
+        description: "IAM role that the apply job assumes through GitHub OIDC"
+        required: false
+      plan-encryption-key:
+        description: "Passphrase that encrypts the saved plan artifact. Required for runs that apply changes."
+        required: false
+      secret-tfvars:
+        description: "Contents of a .tfvars file with sensitive variable values"
+        required: false
+      tf-token:
+        description: "HCP Terraform or Terraform Enterprise API token"
+        required: false
+      github-token:
+        description: "Token that can read the private module repositories"
         required: false
       extra-args:
+        description: "Removed in v2. Use secret-tfvars instead."
         required: false
 
+permissions: {}
+
 concurrency:
-  group: ${{ inputs.environment }}
+  group: terraform-${{ inputs.environment }}
   cancel-in-progress: false
 
 defaults:
@@ -61,103 +113,175 @@ defaults:
     shell: bash
 
 env:
-  TF_CLOUD_ORGANIZATION: ${{ inputs.tf-organization}}
-  TF_CLOUD_HOSTNAME: ${{ inputs.tf-hostname }}
-  TF_WORKSPACE: ${{ inputs.tf-workspace }}
-  # For Terraform Enterprise, change the domain name in the TF_TOKEN_app_terraform_io variable
-  # like documented in https://developer.hashicorp.com/terraform/cli/config/config-file#environment-variable-credentials
-  TF_TOKEN_app_terraform_io: ${{ secrets.tf-token }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
 
 jobs:
   terraform-plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # Required for actions/checkout
+      id-token: write # Required to request the GitHub OIDC token
+      pull-requests: write # Required to comment on pull requests
     outputs:
       exitcode: ${{ steps.plan.outputs.exitcode }}
     steps:
+      - name: Check inputs
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          EXTRA_ARGS: ${{ secrets.extra-args }}
+        run: |
+          if [[ -n "$EXTRA_ARGS" ]]; then
+            echo "::error::The extra-args secret was removed in v2. Put the values in the secret-tfvars secret as a .tfvars file."
+            exit 1
+          fi
+          if [[ ! "$ENVIRONMENT" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            echo "::error::The environment input can contain only letters, numbers, hyphens, and underscores."
+            exit 1
+          fi
       - name: Checkout
-        uses: actions/checkout@v6
-      - name: Checkout composite actions
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: aws-samples/aws-terraform-reusable-workflow
-          ref: ${{ inputs.ref }}
-          path: composite
+          persist-credentials: false
+      - name: Check variables file
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          if [[ ! -f "envs/$ENVIRONMENT/terraform.tfvars" ]]; then
+            echo "::error::envs/$ENVIRONMENT/terraform.tfvars doesn't exist. Create it, even if it's empty."
+            exit 1
+          fi
+      - name: Write secret variables file
+        id: secret-tfvars
+        env:
+          SECRET_TFVARS: ${{ secrets.secret-tfvars }}
+        run: |
+          if [[ -n "$SECRET_TFVARS" ]]; then
+            file="$RUNNER_TEMP/secret.tfvars"
+            (umask 077 && printf '%s\n' "$SECRET_TFVARS" >"$file")
+            echo "path=$file" >>"$GITHUB_OUTPUT"
+          fi
       - name: Terraform Init
         id: init
-        uses: ./composite/.github/actions/terraform-init
+        uses: $/.github/actions/terraform-init
         with:
           tf-version: ${{ inputs.tf-version }}
           aws-region: ${{ inputs.aws-region }}
-          terraform-wrapper: true
-          local-execution-mode: ${{ inputs.local-execution-mode }}
           terraform-execution-iam-role-arn: ${{ secrets.terraform-execution-iam-plan-role-arn }}
+          role-duration-seconds: ${{ inputs.role-duration-seconds }}
           setup-python: ${{ inputs.setup-python }}
           python-version: ${{ inputs.python-version }}
+          enable-github-modules: ${{ inputs.enable-github-modules }}
+          github-token: ${{ secrets.github-token }}
+          tf-organization: ${{ inputs.tf-organization }}
+          tf-hostname: ${{ inputs.tf-hostname }}
+          tf-workspace: ${{ inputs.tf-workspace }}
+          tf-token: ${{ secrets.tf-token }}
       - name: Terraform Plan
         id: plan
-        uses: ./composite/.github/actions/terraform-plan
+        uses: $/.github/actions/terraform-plan
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           deploy: ${{ inputs.deploy }}
           aws-region: ${{ inputs.aws-region }}
           environment: ${{ inputs.environment }}
           init-outcome: ${{ steps.init.outputs.outcome }}
-          extra-args: ${{ secrets.extra-args }}
+          secret-tfvars-file: ${{ steps.secret-tfvars.outputs.path }}
+          pr-comment: ${{ inputs.pr-comment }}
+          run-terraform-test: ${{ inputs.run-terraform-test }}
+          upload-plan: ${{ !startsWith(github.event_name, 'pull_request') && github.ref == format('refs/heads/{0}', inputs.apply-branch) }}
+          plan-encryption-key: ${{ secrets.plan-encryption-key }}
+          artifact-name: tfplan-${{ inputs.environment }}-${{ inputs.aws-region }}
+
   terraform-apply:
-    needs: [terraform-plan]
     name: Terraform Apply
-    if: (github.ref_name == 'main' && needs.terraform-plan.outputs.exitcode == 2)
+    needs: [terraform-plan]
+    if: >-
+      needs.terraform-plan.outputs.exitcode == '2' &&
+      !startsWith(github.event_name, 'pull_request') &&
+      github.ref == format('refs/heads/{0}', inputs.apply-branch)
     runs-on: ubuntu-latest
     environment:
       name: ${{ inputs.environment }}
+    permissions:
+      contents: read # Required for actions/checkout
+      id-token: write # Required to request the GitHub OIDC token
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-      - name: Checkout composite actions
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: aws-samples/aws-terraform-reusable-workflow
-          ref: ${{ inputs.ref }}
-          path: composite
+          persist-credentials: false
+      - name: Download saved plan
+        id: saved-plan
+        uses: $/.github/actions/download-plan
+        with:
+          artifact-name: tfplan-${{ inputs.environment }}-${{ inputs.aws-region }}
+          plan-encryption-key: ${{ secrets.plan-encryption-key }}
+      - name: Write secret variables file
+        id: secret-tfvars
+        env:
+          SECRET_TFVARS: ${{ secrets.secret-tfvars }}
+        run: |
+          if [[ -n "$SECRET_TFVARS" ]]; then
+            file="$RUNNER_TEMP/secret.tfvars"
+            (umask 077 && printf '%s\n' "$SECRET_TFVARS" >"$file")
+            echo "path=$file" >>"$GITHUB_OUTPUT"
+          fi
       - name: Terraform Init
-        id: init
-        uses: ./composite/.github/actions/terraform-init
+        uses: $/.github/actions/terraform-init
         with:
           tf-version: ${{ inputs.tf-version }}
           aws-region: ${{ inputs.aws-region }}
-          terraform-wrapper: false
-          local-execution-mode: ${{ inputs.local-execution-mode }}
           terraform-execution-iam-role-arn: ${{ secrets.terraform-execution-iam-apply-role-arn }}
+          role-duration-seconds: ${{ inputs.role-duration-seconds }}
           setup-python: ${{ inputs.setup-python }}
           python-version: ${{ inputs.python-version }}
-      - name: Define Terraform Apply Command # 'terraform apply' or 'terraform destroy'
-        id: tf_apply_command
-        run: |
-          if ${{ inputs.deploy }}
-          then
-            echo "APPLY_COMMAND=terraform apply" >> $GITHUB_OUTPUT
-          else
-            echo "APPLY_COMMAND=terraform destroy" >> $GITHUB_OUTPUT
-          fi
+          enable-github-modules: ${{ inputs.enable-github-modules }}
+          github-token: ${{ secrets.github-token }}
+          tf-organization: ${{ inputs.tf-organization }}
+          tf-hostname: ${{ inputs.tf-hostname }}
+          tf-workspace: ${{ inputs.tf-workspace }}
+          tf-token: ${{ secrets.tf-token }}
+      # Applies the plan that was reviewed. Terraform refuses the saved plan if
+      # the state changed after the plan was created.
       - name: Terraform Apply
+        env:
+          PLAN_FILE: ${{ steps.saved-plan.outputs.plan-file }}
+          SECRET_TFVARS_FILE: ${{ steps.secret-tfvars.outputs.path }}
         run: |
-          ${{ steps.tf_apply_command.outputs.APPLY_COMMAND }} \
-            -var-file=envs/${{ inputs.environment }}/terraform.tfvars \
-            -var="region=${{ inputs.aws-region }}" \
-            -var="environment=${{ inputs.environment }}" \
-            -auto-approve \
-            -input=false \
-            ${{ secrets.extra-args }}
+          args=(apply -input=false -no-color)
+          if [[ -n "$SECRET_TFVARS_FILE" ]]; then
+            # Ephemeral variables set during the plan must be set again.
+            args+=(-var-file="$SECRET_TFVARS_FILE")
+          fi
+          terraform "${args[@]}" "$PLAN_FILE"
 
   deactivate-deployment:
-    needs: [terraform-apply]
-    if: ${{ ! inputs.deploy }}
     name: Deactivate Deployment
+    needs: [terraform-apply]
+    if: ${{ !inputs.deploy && needs.terraform-apply.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      deployments: write # Required to mark the environment's deployments inactive
     steps:
-      - uses: strumwolf/delete-deployment-environment@v3
+      - name: Mark deployments inactive
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          environment: ${{ inputs.environment }}
-          onlyDeactivateDeployments: true
+          script: |
+            const environment = process.env.ENVIRONMENT;
+            const deployments = await github.paginate(github.rest.repos.listDeployments, {
+              ...context.repo,
+              environment,
+              per_page: 100,
+            });
+            for (const deployment of deployments) {
+              await github.rest.repos.createDeploymentStatus({
+                ...context.repo,
+                deployment_id: deployment.id,
+                state: 'inactive',
+              });
+            }
+            core.info(`Marked ${deployments.length} deployments in ${environment} inactive.`);

@@ -1,0 +1,7 @@
+# actionlint 1.7.12 doesn't know the self-repository `uses: $/...` syntax that
+# GitHub added on 2026-07-30. Remove this file once actionlint supports it:
+# https://github.com/rhysd/actionlint/issues/711
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      - 'specifying action "\$/[^"]+" in invalid format because ref is missing'
