@@ -47,6 +47,10 @@ inputs:
     required: false
     default: ""
     description: "HCP Terraform or Terraform Enterprise API token"
+  backend-config-file:
+    required: false
+    default: ""
+    description: "Backend configuration file passed to terraform init with -backend-config, if it exists"
 outputs:
   outcome:
     description: "Outcome of terraform init"
@@ -91,4 +95,5 @@ runs:
         TF_HOSTNAME_INPUT: ${{ inputs.tf-hostname }}
         TF_WORKSPACE_INPUT: ${{ inputs.tf-workspace }}
         TF_TOKEN_INPUT: ${{ inputs.tf-token }}
+        BACKEND_CONFIG_FILE: ${{ inputs.backend-config-file }}
       run: bash "$GITHUB_ACTION_PATH/init.sh"

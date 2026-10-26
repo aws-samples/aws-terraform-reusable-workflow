@@ -36,6 +36,7 @@ It supports the Amazon S3 backend with GitHub OIDC (the default), and HCP Terraf
 - Terraform 1.10 or later. Saved plans with the `cloud` block need 1.6, and ephemeral variables need 1.10.
 - A root module in the repository root with:
   - `envs/<environment>/terraform.tfvars` for each environment. The file can be empty.
+  - Optionally, `envs/<environment>/backend.tfbackend` for each environment. When it exists, `terraform init` reads it with `-backend-config`. See [Option 1](#option-1-s3-backend-with-github-oidc).
   - `region` and `environment` variables. The workflow sets them from the `aws-region` and `environment` inputs.
   - The dependency lock file (`.terraform.lock.hcl`) committed. When it's present, `terraform init` runs with `-lockfile=readonly`.
 - A [GitHub environment](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) for each environment, named like the `environment` input (for example, `dev`, `test`, `prod`). For production, add required reviewers and a deployment branch rule that allows only the apply branch.
@@ -49,20 +50,29 @@ It supports the Amazon S3 backend with GitHub OIDC (the default), and HCP Terraf
 
 ## Option 1: S3 backend with GitHub OIDC
 
-Configure the backend in the root module. With `use_lockfile`, Terraform locks the state with a lock file in the bucket:
+Each environment usually deploys to its own AWS account, so keep each environment's state in a bucket in that account. Declare a partial `s3` backend in the root module, with only the settings that every environment shares:
 
 ```hcl
 terraform {
   backend "s3" {
-    bucket       = "amzn-s3-demo-bucket"
-    key          = "my-app/terraform.tfstate"
-    region       = "us-east-1"
     encrypt      = true
-    kms_key_id   = "alias/terraform-state"
     use_lockfile = true
   }
 }
 ```
+
+Then add an `envs/<environment>/backend.tfbackend` file for each environment. The plan and apply jobs pass it to `terraform init` with `-backend-config`, so both jobs use the same state:
+
+```hcl
+bucket     = "amzn-s3-demo-bucket-dev"
+key        = "my-app/terraform.tfstate"
+region     = "us-east-1"
+kms_key_id = "alias/terraform-state"
+```
+
+With `use_lockfile`, Terraform locks the state with a lock file in the bucket. If every environment shares one bucket, you can put the whole configuration in the `backend` block instead and leave out the `.tfbackend` files, but give each environment its own `key`. A configuration that sets `key` in the `backend` block shares one state across all environments.
+
+For local runs, pass the same file: `terraform init -backend-config=envs/dev/backend.tfbackend`.
 
 ### AWS IAM
 

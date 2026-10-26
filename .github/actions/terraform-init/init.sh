@@ -33,6 +33,15 @@ if [[ -n "${TF_ORGANIZATION_INPUT:-}" ]]; then
 fi
 
 args=(init -input=false -no-color)
+# A per-environment backend file completes a partial backend block, so that
+# each environment keeps its state in its own bucket and key.
+if [[ -n "${BACKEND_CONFIG_FILE:-}" && -f "$BACKEND_CONFIG_FILE" ]]; then
+  [[ "$BACKEND_CONFIG_FILE" =~ ^envs/[A-Za-z0-9_-]+/backend\.tfbackend$ ]] ||
+    fail "The backend configuration file must be envs/<environment>/backend.tfbackend."
+  [[ -z "${TF_ORGANIZATION_INPUT:-}" ]] ||
+    fail "Remove $BACKEND_CONFIG_FILE or tf-organization. HCP Terraform uses the cloud block, not a backend file."
+  args+=(-backend-config="$BACKEND_CONFIG_FILE")
+fi
 if [[ -f .terraform.lock.hcl ]]; then
   args+=(-lockfile=readonly)
 else

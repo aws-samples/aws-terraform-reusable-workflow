@@ -178,6 +178,7 @@ jobs:
           tf-hostname: ${{ inputs.tf-hostname }}
           tf-workspace: ${{ inputs.tf-workspace }}
           tf-token: ${{ secrets.tf-token }}
+          backend-config-file: envs/${{ inputs.environment }}/backend.tfbackend
       - name: Terraform Plan
         id: plan
         uses: $/.github/actions/terraform-plan
@@ -243,6 +244,7 @@ jobs:
           tf-hostname: ${{ inputs.tf-hostname }}
           tf-workspace: ${{ inputs.tf-workspace }}
           tf-token: ${{ secrets.tf-token }}
+          backend-config-file: envs/${{ inputs.environment }}/backend.tfbackend
       # Applies the plan that was reviewed. Terraform refuses the saved plan if
       # the state changed after the plan was created.
       - name: Terraform Apply
