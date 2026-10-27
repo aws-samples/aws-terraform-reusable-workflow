@@ -6,7 +6,7 @@ For each environment, the workflow:
 
 1. **Plans.** On every pull request and push, it checks formatting, validates, optionally runs `terraform test`, and runs `terraform plan` with a read-only IAM role. On pull requests, it posts the plan as a comment.
 2. **Saves the plan.** On the apply branch (`main` by default), it encrypts the saved plan and the dependency lock file, and uploads them as a workflow artifact that expires after one day.
-3. **Applies the reviewed plan.** The apply job runs in a GitHub environment, so you can require an approval first. It assumes the apply IAM role and applies the saved plan. If the state changed after the plan was created, Terraform refuses the plan and nothing is applied.
+3. **Applies the reviewed plan.** The apply job runs in a GitHub environment, so you can require an approval first (see [Requirements](#requirements) for where approvals are available). It assumes the apply IAM role and applies the saved plan. If the state changed after the plan was created, Terraform refuses the plan and nothing is applied.
 
 It supports the Amazon S3 backend with GitHub OIDC (the default), and HCP Terraform or Terraform Enterprise in remote, agent, or local execution mode.
 
@@ -40,6 +40,10 @@ It supports the Amazon S3 backend with GitHub OIDC (the default), and HCP Terraf
   - `region` and `environment` variables. The workflow sets them from the `aws-region` and `environment` inputs.
   - The dependency lock file (`.terraform.lock.hcl`) committed. When it's present, `terraform init` runs with `-lockfile=readonly`.
 - A [GitHub environment](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) for each environment, named like the `environment` input (for example, `dev`, `test`, `prod`). For production, add required reviewers and a deployment branch rule that allows only the apply branch.
+
+  Environment features depend on the repository's visibility and your GitHub plan. See [Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments):
+  - **Required reviewers** are available in public repositories. In private and internal repositories, they need GitHub Enterprise Cloud. Without reviewers, the apply job starts as soon as the plan job finishes, so review the plan in the pull request comment before you merge. The plan on the apply branch can still differ from that comment if other changes merged first.
+  - **Environments and deployment branch rules** are available in public repositories, and in private repositories on GitHub Pro, GitHub Team, or GitHub Enterprise Cloud.
 - A `PLAN_ENCRYPTION_KEY` repository secret that holds a random passphrase:
 
   ```bash
@@ -76,6 +80,19 @@ For local runs, pass the same file: `terraform init -backend-config=envs/dev/bac
 
 ### AWS IAM
 
+The trust policies match the OIDC subject (`sub`) claim, which starts with the repository's subject prefix. GitHub uses one of two [subject formats](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims):
+
+- **Immutable:** `repo:my-org@123456/my-repo@456789`, with the owner ID and the repository ID. Repositories created after July 15, 2026 use it, as do older repositories that opted in or were renamed or transferred after that date.
+- **Name-based:** `repo:my-org/my-repo`. Other repositories created before July 15, 2026 use it.
+
+Get your repository's prefix from the GitHub API:
+
+```bash
+gh api repos/my-org/my-repo/actions/oidc/customization/sub --jq .sub_claim_prefix
+```
+
+If a trust policy uses the wrong format, every `AssumeRoleWithWebIdentity` call is denied. The examples below use the immutable format.
+
 In each AWS account:
 
 1. Create the [GitHub OIDC identity provider](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) for `https://token.actions.githubusercontent.com` with the audience `sts.amazonaws.com`.
@@ -90,8 +107,8 @@ In each AWS account:
      "StringEquals": {
        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
        "token.actions.githubusercontent.com:sub": [
-         "repo:my-org/my-repo:pull_request",
-         "repo:my-org/my-repo:ref:refs/heads/main"
+         "repo:my-org@123456/my-repo@456789:pull_request",
+         "repo:my-org@123456/my-repo@456789:ref:refs/heads/main"
        ]
      }
    }
@@ -103,7 +120,7 @@ In each AWS account:
    "Condition": {
      "StringEquals": {
        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-       "token.actions.githubusercontent.com:sub": "repo:my-org/my-repo:environment:prod",
+       "token.actions.githubusercontent.com:sub": "repo:my-org@123456/my-repo@456789:environment:prod",
        "token.actions.githubusercontent.com:ref": "refs/heads/main"
      }
    }
@@ -224,6 +241,8 @@ jobs:
 ```
 
 After a successful destroy, the workflow marks the environment's GitHub deployments inactive.
+
+The destroy's apply job runs in the GitHub environment, so that the environment's protection rules apply to it. By default, GitHub records a deployment for every job that runs in an environment, so each destroy adds a deployment with the task `deploy` and the state `success`. The workflow then marks it inactive with the others, so in the environment's deployment history a destroy looks like a successful deployment that is now inactive. GitHub can skip that record with [`deployment: false`](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/control-deployments#using-environments-without-deployments), but it fails any job that uses that setting in an environment with custom deployment protection rules, so the workflow doesn't use it.
 
 ## Option 2: HCP Terraform or Terraform Enterprise
 

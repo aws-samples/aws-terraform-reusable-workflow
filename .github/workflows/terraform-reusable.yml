@@ -259,6 +259,10 @@ jobs:
           fi
           terraform "${args[@]}" "$PLAN_FILE"
 
+  # The apply job runs in the environment, so a destroy run also records a
+  # deployment of its own. This job marks it inactive with the others. The apply
+  # job doesn't set environment.deployment to false, because GitHub fails jobs
+  # with that setting in environments that have custom protection rules.
   deactivate-deployment:
     name: Deactivate Deployment
     needs: [terraform-apply]
