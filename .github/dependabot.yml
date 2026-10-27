@@ -1,6 +1,13 @@
 version: 2
 updates:
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # The composite actions pin their own actions, so Dependabot checks them too.
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
+    # Wait a week before proposing a new release, so that a compromised release
+    # that is caught and pulled within days never reaches this repository.
+    cooldown:
+      default-days: 7

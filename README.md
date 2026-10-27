@@ -1,327 +1,345 @@
 # Terraform Reusable Workflow
 
-This repository provides a GitHub Actions reusable workflow that manages infrastructure provisioning within AWS using Terraform.
+This repository provides a GitHub Actions reusable workflow that plans and applies Terraform configurations in one or more AWS accounts.
+
+For each environment, the workflow:
+
+1. **Plans.** On every pull request and push, it checks formatting, validates, optionally runs `terraform test`, and runs `terraform plan` with a read-only IAM role. On pull requests, it posts the plan as a comment.
+2. **Saves the plan.** On the apply branch (`main` by default), it encrypts the saved plan and the dependency lock file, and uploads them as a workflow artifact that expires after one day.
+3. **Applies the reviewed plan.** The apply job runs in a GitHub environment, so you can require an approval first (see [Requirements](#requirements) for where approvals are available). It assumes the apply IAM role and applies the saved plan. If the state changed after the plan was created, Terraform refuses the plan and nothing is applied.
+
+It supports the Amazon S3 backend with GitHub OIDC (the default), and HCP Terraform or Terraform Enterprise in remote, agent, or local execution mode.
 
 <!-- TOC -->
 
 - [Terraform Reusable Workflow](#terraform-reusable-workflow)
-  - [Usage](#usage)
-    - [Determine the Workspace Execution Mode](#determine-the-workspace-execution-mode)
-    - [Prerequisites](#prerequisites)
-    - [Remote/Agent Execution mode configuration](#remoteagent-execution-mode-configuration)
-      - [AWS IAM Terraform Cloud/Enterprise](#aws-iam-terraform-cloudenterprise)
-      - [Terraform Cloud/Enterprise](#terraform-cloudenterprise)
-      - [Deploy workflow with matrix strategy](#deploy-workflow-with-matrix-strategy)
-      - [Optional Destroy workflow with matrix strategy](#optional-destroy-workflow-with-matrix-strategy)
-    - [Local Execution mode configuration](#local-execution-mode-configuration)
-      - [AWS IAM GitHub Actions](#aws-iam-github-actions)
-      - [GitHub Repository](#github-repository)
-      - [Sequential Deploy workflow](#sequential-deploy-workflow)
-      - [Optional Sequential Destroy workflow](#optional-sequential-destroy-workflow)
+  - [Requirements](#requirements)
+  - [Option 1: S3 backend with GitHub OIDC](#option-1-s3-backend-with-github-oidc)
+    - [AWS IAM](#aws-iam)
+    - [GitHub repository](#github-repository)
+    - [Deploy workflow](#deploy-workflow)
+    - [Destroy workflow](#destroy-workflow)
+  - [Option 2: HCP Terraform or Terraform Enterprise](#option-2-hcp-terraform-or-terraform-enterprise)
+  - [Sensitive variables](#sensitive-variables)
+  - [Private modules on GitHub](#private-modules-on-github)
+  - [Inputs](#inputs)
+  - [Secrets](#secrets)
+  - [Security considerations](#security-considerations)
+  - [Migrating from v1](#migrating-from-v1)
   - [Security](#security)
   - [License](#license)
 
 <!-- /TOC -->
 
-## Usage
+## Requirements
 
-This section provides the steps required to call this reusable workflow from another repository in order to test and deploy AWS resources with Terraform in multiple accounts. The workflow provided in this repository supports both Terraform Cloud/Enterprise Remote/Agent and Local [Execution Modes](https://developer.hashicorp.com/terraform/cloud-docs/workspaces/settings#execution-mode).
+- Terraform 1.10 or later. Saved plans with the `cloud` block need 1.6, and ephemeral variables need 1.10.
+- A root module in the repository root with:
+  - `envs/<environment>/terraform.tfvars` for each environment. The file can be empty.
+  - Optionally, `envs/<environment>/backend.tfbackend` for each environment. When it exists, `terraform init` reads it with `-backend-config`. See [Option 1](#option-1-s3-backend-with-github-oidc).
+  - `region` and `environment` variables. The workflow sets them from the `aws-region` and `environment` inputs.
+  - The dependency lock file (`.terraform.lock.hcl`) committed. When it's present, `terraform init` runs with `-lockfile=readonly`.
+- A [GitHub environment](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) for each environment, named like the `environment` input (for example, `dev`, `test`, `prod`). For production, add required reviewers and a deployment branch rule that allows only the apply branch.
 
-### Determine the Workspace Execution Mode
+  Environment features depend on the repository's visibility and your GitHub plan. See [Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments):
+  - **Required reviewers** are available in public repositories. In private and internal repositories, they need GitHub Enterprise Cloud. Without reviewers, the apply job starts as soon as the plan job finishes, so review the plan in the pull request comment before you merge. The plan on the apply branch can still differ from that comment if other changes merged first.
+  - **Environments and deployment branch rules** are available in public repositories, and in private repositories on GitHub Pro, GitHub Team, or GitHub Enterprise Cloud.
+- A `PLAN_ENCRYPTION_KEY` repository secret that holds a random passphrase:
 
-The default value is **Remote**, which instructs Terraform Cloud/Enterprise to perform Terraform runs on its own virtual machines. This provides a consistent and reliable run environment, and enables advanced features like Sentinel policy enforcement, cost estimation, notifications, version control integration, and more. The **Agent** mode acts in the same way but performs Terraform runs on isolated, private, or on-premises infrastructure called [Terraform Cloud Agents](https://developer.hashicorp.com/terraform/cloud-docs/agents).
+  ```bash
+  openssl rand -base64 32 | gh secret set PLAN_ENCRYPTION_KEY
+  ```
 
-If a Terraform configuration is using providers or modules that require binaries like Python, and you cannot use an agent because none are available in your Terraform Cloud/Enterprise organization, you need to use the **Local** execution mode.
+- GitHub-hosted runners, or self-hosted runners at version 2.336.0 or later. The workflow loads its composite actions with the `$/` self-repository syntax, which isn't available on GitHub Enterprise Server.
 
-### Prerequisites
+## Option 1: S3 backend with GitHub OIDC
 
-- AWS Account for each environment where you want to test and deploy AWS resources
-- Terraform Cloud/Enterprise organization
-- Terraform Cloud/Enterprise workspace using the CLI-driven workflow type for each AWS account
-- Terraform Cloud/Enterprise user or team token that can access all the workspaces
-- GitHub Repository with the following configuration:
-  - `TF_TOKEN` repository secret
-  - Repository variables:
-    - `APP_NAME`
-    - `TF_HOSTNAME`
-    - `TF_ORGANIZATION`
-    - `TF_VERSION`
-  - Environments
-    > Use the *`env`* format for environment names (e.g., `dev`,`test`,`prod`)
-  - (Optional) If not using Terraform Cloud, update `TF_TOKEN_app_terraform_io` environment variable in [terraform-reusable.yml](./.github/workflows/terraform-reusable.yml#L64) to use your Terraform Enterprise endpoint hostname, replacing any periods with underscores. Refer to [Running Terraform in automation](https://developer.hashicorp.com/terraform/tutorials/automation/automate-terraform#terraform-cloud) for more information.
+Each environment usually deploys to its own AWS account, so keep each environment's state in a bucket in that account. Declare a partial `s3` backend in the root module, with only the settings that every environment shares:
 
-### Remote/Agent Execution mode configuration
+```hcl
+terraform {
+  backend "s3" {
+    encrypt      = true
+    use_lockfile = true
+  }
+}
+```
 
-#### AWS IAM (Terraform Cloud/Enterprise)
+Then add an `envs/<environment>/backend.tfbackend` file for each environment. The plan and apply jobs pass it to `terraform init` with `-backend-config`, so both jobs use the same state:
 
-- IAM [Terraform Cloud/Enterprise OIDC provider](https://developer.hashicorp.com/terraform/cloud-docs/workspaces/dynamic-provider-credentials/aws-configuration#create-an-oidc-identity-provider) configured in each AWS account
-- Terraform Execution IAM plan and apply roles with [Terraform Cloud/Enterprise OIDC trust policy](https://developer.hashicorp.com/terraform/cloud-docs/workspaces/dynamic-provider-credentials/aws-configuration#create-an-oidc-identity-provider) created in each AWS account
+```hcl
+bucket     = "amzn-s3-demo-bucket-dev"
+key        = "my-app/terraform.tfstate"
+region     = "us-east-1"
+kms_key_id = "alias/terraform-state"
+```
 
-#### Terraform Cloud/Enterprise
+With `use_lockfile`, Terraform locks the state with a lock file in the bucket. If every environment shares one bucket, you can put the whole configuration in the `backend` block instead and leave out the `.tfbackend` files, but give each environment its own `key`. A configuration that sets `key` in the `backend` block shares one state across all environments.
 
-- Add sensitive variables required by the terraform module to the workspaces
-- Create the dynamic provider credentials [environment variables](https://developer.hashicorp.com/terraform/cloud-docs/workspaces/dynamic-provider-credentials/aws-configuration#optional-environment-variables) in all workspaces:
-  - TFC_AWS_PROVIDER_AUTH
-  - TFC_AWS_PLAN_ROLE_ARN
-  - TFC_AWS_APPLY_ROLE_ARN
+For local runs, pass the same file: `terraform init -backend-config=envs/dev/backend.tfbackend`.
 
-#### Deploy workflow with matrix strategy
+### AWS IAM
 
-In the repository where the Terraform code to execute resides, define the caller deploy workflow like in the following example:
+The trust policies match the OIDC subject (`sub`) claim, which starts with the repository's subject prefix. GitHub uses one of two [subject formats](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims):
+
+- **Immutable:** `repo:my-org@123456/my-repo@456789`, with the owner ID and the repository ID. Repositories created after July 15, 2026 use it, as do older repositories that opted in or were renamed or transferred after that date.
+- **Name-based:** `repo:my-org/my-repo`. Other repositories created before July 15, 2026 use it.
+
+Get your repository's prefix from the GitHub API:
+
+```bash
+gh api repos/my-org/my-repo/actions/oidc/customization/sub --jq .sub_claim_prefix
+```
+
+If a trust policy uses the wrong format, every `AssumeRoleWithWebIdentity` call is denied. The examples below use the immutable format.
+
+In each AWS account:
+
+1. Create the [GitHub OIDC identity provider](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws) for `https://token.actions.githubusercontent.com` with the audience `sts.amazonaws.com`.
+2. Create a **plan role**. Its permissions should be read-only for the resources, plus access to the state:
+   - `s3:ListBucket` on the bucket, `s3:GetObject` on the state key, and `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on `<key>.tflock`. A plan takes the state lock.
+   - `kms:Decrypt`, plus `kms:Encrypt` and `kms:GenerateDataKey` for the lock file, on the state key's KMS key.
+
+   The plan job doesn't run in a GitHub environment, so its OIDC subject names the branch or the pull request. Trust both:
+
+   ```json
+   "Condition": {
+     "StringEquals": {
+       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+       "token.actions.githubusercontent.com:sub": [
+         "repo:my-org@123456/my-repo@456789:pull_request",
+         "repo:my-org@123456/my-repo@456789:ref:refs/heads/main"
+       ]
+     }
+   }
+   ```
+
+3. Create an **apply role** with the permissions to manage the resources and write the state. The apply job runs in the GitHub environment, so trust only that environment on the apply branch:
+
+   ```json
+   "Condition": {
+     "StringEquals": {
+       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+       "token.actions.githubusercontent.com:sub": "repo:my-org@123456/my-repo@456789:environment:prod",
+       "token.actions.githubusercontent.com:ref": "refs/heads/main"
+     }
+   }
+   ```
+
+Run IAM Access Analyzer [policy validation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-policy-validation.html) on both trust policies.
+
+### GitHub repository
+
+- Repository variable `TF_VERSION`, for example `1.17.0`.
+- Repository secrets `<ENV>_AWS_PLAN_ROLE_ARN` and `<ENV>_AWS_APPLY_ROLE_ARN` for each environment. Use repository secrets: a caller job can't pass environment secrets to a reusable workflow. The apply role's trust policy is what limits it to the protected environment.
+- Repository secret `PLAN_ENCRYPTION_KEY`.
+
+### Deploy workflow
+
+Replace `<commit-sha>` with the full commit SHA of the release you use, and keep the version in the comment so that Dependabot can update both:
 
 ```yaml
 name: Deploy
 
 permissions:
-  id-token: write # This is required for requesting the JWT
-  contents: read # This is required for actions/checkout
-  pull-requests: write # This is required to add comments to Pull Requests
-  deployments: write # This is required to deactivate deployments
+  contents: read # Required for actions/checkout
+  id-token: write # Required to request the GitHub OIDC token
+  pull-requests: write # Required to comment on pull requests
+  deployments: write # Required to deactivate deployments after a destroy
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - "**.tf*"
+      - "envs/**"
+      - ".terraform.lock.hcl"
       - ".github/workflows/deploy.yml"
   push:
     branches:
-      - "main"
+      - main
     paths:
       - "**.tf*"
+      - "envs/**"
+      - ".terraform.lock.hcl"
       - ".github/workflows/deploy.yml"
-
-concurrency:
-  group: ${{ github.ref }}
-  cancel-in-progress: false
-
-jobs:
-  deploy:
-    name: Progressive Deployment
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.2.0
-    strategy:
-      max-parallel: 1
-      fail-fast: true
-      matrix:
-        include:
-          - environment: dev
-            region: us-east-1
-          - environment: test
-            region: us-west-2
-          - environment: prod
-            region: us-east-2
-    with:
-      deploy: true
-      tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-${{ matrix.environment }}
-      aws-region: ${{ matrix.region }}
-      environment: ${{ matrix.environment }}
-      ref: v1.2.0
-    secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
-```
-
-#### (Optional) Destroy workflow with matrix strategy
-
-Create the caller destroy workflow file like in the following example:
-
-```yaml
-name: Destroy
-
-permissions:
-  id-token: write # This is required for requesting the JWT
-  contents: read # This is required for actions/checkout
-  pull-requests: write # This is required to add comments to Pull Requests
-  deployments: write # This is required to deactivate deployments
-
-on:
-  workflow_dispatch:
-
-jobs:
-  destroy:
-    name: Progressive Destroy
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.2.0
-    strategy:
-      max-parallel: 1
-      fail-fast: true
-      matrix:
-        include:
-          - environment: dev
-            region: us-east-1
-          - environment: test
-            region: us-west-2
-          - environment: prod
-            region: us-east-2
-    with:
-      deploy: false
-      tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: FI-AWSCE-${{ vars.APP_NAME }}-${{ matrix.environment }}
-      aws-region: ${{ matrix.region }}
-      environment: ${{ matrix.environment }}
-      ref: v1.2.0
-    secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
-```
-
-### Local Execution mode configuration
-
-#### AWS IAM (GitHub Actions)
-
-- IAM [GitHub Actions OIDC provider](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services) configured in each AWS account
-- Terraform Execution IAM plan and apply roles with [GitHub OIDC trust policy](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services#configuring-the-role-and-trust-policy) created in each AWS account
-
-#### GitHub Repository
-
-- Create **Repository secrets** for all the Terraform Execution IAM **plan** role ARNs using the `<ENV>_AWS_PLAN_ROLE_ARN` format
-- Create **Environment secrets** for all the Terraform Execution IAM **apply** role ARNs using the `<ENV>_AWS_APPLY_ROLE_ARN` format
-- (Optional) Create `<ENV>_EXTRA_ARGS` repository secrets for passing sensitive variables required by the terraform module using the `-var` option like in the following example:
-
-```terraform
--var="secret_password=SuperSecretPassword" \
--var="secret_token=super_secret_token"
-```
-
-#### Sequential Deploy workflow
-
-Create the caller deploy workflow file like in the following example:
-
-```yaml
-name: Deploy
-
-permissions:
-  id-token: write # This is required for requesting the JWT
-  contents: read # This is required for actions/checkout
-  pull-requests: write # This is required to add comments to Pull Requests
-  deployments: write # This is required to deactivate deployments
-
-on:
-  workflow_dispatch:
-  pull_request:
-    paths:
-      - "**.tf*"
-      - ".github/workflows/deploy.yml"
-  push:
-    branches:
-      - "main"
-    paths:
-      - "**.tf*"
-      - ".github/workflows/deploy.yml"
-
-concurrency:
-  group: ${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   deploy-dev:
-    name: Dev Deployment
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.2.0
+    name: Dev
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@<commit-sha> # v2.0.0
     with:
       deploy: true
       tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-dev
-      aws-region: "us-east-1"
-      environment: "dev"
-      ref: v1.2.0
-      local-execution-mode: true
-      setup-python: true
-      python-version: "3.11"
+      aws-region: us-east-1
+      environment: dev
     secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
       terraform-execution-iam-plan-role-arn: ${{ secrets.DEV_AWS_PLAN_ROLE_ARN }}
       terraform-execution-iam-apply-role-arn: ${{ secrets.DEV_AWS_APPLY_ROLE_ARN }}
-      extra-args: ${{ secrets.DEV_EXTRA_ARGS }}
+      plan-encryption-key: ${{ secrets.PLAN_ENCRYPTION_KEY }}
+
   deploy-prod:
+    name: Prod
     needs: deploy-dev
-    name: Prod Deployment
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.2.0
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@<commit-sha> # v2.0.0
     with:
       deploy: true
       tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-prod
-      aws-region: "us-east-2"
-      environment: "prod"
-      ref: v1.2.0
-      local-execution-mode: true
-      setup-python: true
-      python-version: "3.11"
+      aws-region: us-east-2
+      environment: prod
     secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
       terraform-execution-iam-plan-role-arn: ${{ secrets.PROD_AWS_PLAN_ROLE_ARN }}
       terraform-execution-iam-apply-role-arn: ${{ secrets.PROD_AWS_APPLY_ROLE_ARN }}
-      extra-args: ${{ secrets.PROD_EXTRA_ARGS }}
+      plan-encryption-key: ${{ secrets.PLAN_ENCRYPTION_KEY }}
 ```
 
-#### (Optional) Sequential Destroy workflow
+The caller must grant all four permissions. GitHub refuses to start a reusable workflow whose jobs request more permissions than the caller grants.
 
-Create the caller destroy workflow file like in the following example:
+### Destroy workflow
+
+Set `deploy: false` to plan and apply a destroy. Destroy in the reverse order of deployment:
 
 ```yaml
 name: Destroy
 
 permissions:
-  id-token: write # This is required for requesting the JWT
-  contents: read # This is required for actions/checkout
-  pull-requests: write # This is required to add comments to Pull Requests
-  deployments: write # This is required to deactivate deployments
+  contents: read
+  id-token: write
+  pull-requests: write
+  deployments: write
 
 on:
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  destroy-dev:
-    name: Dev Destroy
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.2.0
-    with:
-      deploy: false
-      tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-dev
-      aws-region: "us-east-1"
-      environment: "dev"
-      ref: v1.2.0
-      local-execution-mode: true
-      setup-python: true
-      python-version: "3.10"
-    secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
-      terraform-execution-iam-plan-role-arn: ${{ secrets.DEV_AWS_PLAN_ROLE_ARN }}
-      terraform-execution-iam-apply-role-arn: ${{ secrets.DEV_AWS_APPLY_ROLE_ARN }}
-      extra-args: ${{ secrets.DEV_EXTRA_ARGS }}
   destroy-prod:
-    needs: destroy-dev
-    name: Prod Destroy
-    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@v1.2.0
+    name: Prod
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@<commit-sha> # v2.0.0
     with:
       deploy: false
       tf-version: ${{ vars.TF_VERSION }}
-      tf-organization: ${{ vars.TF_ORGANIZATION }}
-      tf-hostname: ${{ vars.TF_HOSTNAME }}
-      tf-workspace: ${{ vars.APP_NAME }}-prod
-      aws-region: "us-east-2"
-      environment: "prod"
-      ref: v1.2.0
-      local-execution-mode: true
-      setup-python: true
-      python-version: "3.10"
+      aws-region: us-east-2
+      environment: prod
     secrets:
-      tf-token: ${{ secrets.TF_TOKEN }}
       terraform-execution-iam-plan-role-arn: ${{ secrets.PROD_AWS_PLAN_ROLE_ARN }}
       terraform-execution-iam-apply-role-arn: ${{ secrets.PROD_AWS_APPLY_ROLE_ARN }}
-      extra-args: ${{ secrets.PROD_EXTRA_ARGS }}
+      plan-encryption-key: ${{ secrets.PLAN_ENCRYPTION_KEY }}
+
+  destroy-dev:
+    name: Dev
+    needs: destroy-prod
+    uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@<commit-sha> # v2.0.0
+    with:
+      deploy: false
+      tf-version: ${{ vars.TF_VERSION }}
+      aws-region: us-east-1
+      environment: dev
+    secrets:
+      terraform-execution-iam-plan-role-arn: ${{ secrets.DEV_AWS_PLAN_ROLE_ARN }}
+      terraform-execution-iam-apply-role-arn: ${{ secrets.DEV_AWS_APPLY_ROLE_ARN }}
+      plan-encryption-key: ${{ secrets.PLAN_ENCRYPTION_KEY }}
 ```
+
+After a successful destroy, the workflow marks the environment's GitHub deployments inactive.
+
+The destroy's apply job runs in the GitHub environment, so that the environment's protection rules apply to it. By default, GitHub records a deployment for every job that runs in an environment, so each destroy adds a deployment with the task `deploy` and the state `success`. The workflow then marks it inactive with the others, so in the environment's deployment history a destroy looks like a successful deployment that is now inactive. GitHub can skip that record with [`deployment: false`](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/control-deployments#using-environments-without-deployments), but it fails any job that uses that setting in an environment with custom deployment protection rules, so the workflow doesn't use it.
+
+## Option 2: HCP Terraform or Terraform Enterprise
+
+Use a `cloud` block with no arguments in the root module. The workflow sets the organization, hostname, and workspace:
+
+```hcl
+terraform {
+  cloud {}
+}
+```
+
+1. Create a CLI-driven workspace for each environment.
+2. Set the `tf-organization` and `tf-workspace` inputs, and `tf-hostname` for Terraform Enterprise. Pass a team API token that can run plans and applies in the workspaces as the `tf-token` secret.
+3. Choose how runs execute:
+   - **Remote or agent execution:** configure [dynamic provider credentials](https://developer.hashicorp.com/terraform/cloud-docs/dynamic-provider-credentials/aws-configuration) in each workspace (`TFC_AWS_PROVIDER_AUTH`, `TFC_AWS_PLAN_ROLE_ARN`, `TFC_AWS_APPLY_ROLE_ARN`). Don't pass the role ARN secrets. The plan job creates a saved cloud plan, and the apply job applies that run.
+   - **Local execution:** HCP Terraform stores the state, and the runner signs in to AWS. Pass the role ARN secrets as in Option 1.
+
+```yaml
+    with:
+      deploy: true
+      tf-version: ${{ vars.TF_VERSION }}
+      aws-region: us-east-1
+      environment: dev
+      tf-organization: ${{ vars.TF_ORGANIZATION }}
+      tf-workspace: my-app-dev
+    secrets:
+      tf-token: ${{ secrets.TF_TOKEN }}
+      plan-encryption-key: ${{ secrets.PLAN_ENCRYPTION_KEY }}
+```
+
+In remote execution mode, set sensitive values as sensitive workspace variables instead of using `secret-tfvars`.
+
+## Sensitive variables
+
+Store sensitive variable values as the contents of a `.tfvars` file in the `secret-tfvars` secret:
+
+```hcl
+db_password = "example-password"
+```
+
+The workflow writes the secret to a file outside the working directory, readable only by the runner user, and passes it with `-var-file` to the plan and the apply.
+
+Declare these variables with `ephemeral = true` and use them only in write-only arguments (such as `password_wo`) or ephemeral contexts. Terraform then keeps them out of the saved plan and the state, and requires them again at apply, which the workflow handles. A variable that isn't ephemeral is stored in the saved plan and, wherever a resource uses it, in the state.
+
+## Private modules on GitHub
+
+Set `enable-github-modules: true` and pass a token that can read the module repositories as the `github-token` secret. The workflow configures Git to use the token for `https://github.com/` URLs. The workflow's `GITHUB_TOKEN` can read only the calling repository, so use a GitHub App installation token or a fine-grained personal access token with read-only `contents` access to the module repositories.
+
+## Inputs
+
+| Name | Required | Default | Description |
+|---|---|---|---|
+| `deploy` | Yes | | `true` plans and applies the configuration. `false` plans and applies a destroy. |
+| `tf-version` | Yes | | Terraform version |
+| `aws-region` | Yes | | AWS Region, passed as `var.region` |
+| `environment` | Yes | | GitHub environment, `envs/<environment>/terraform.tfvars` file, and `var.environment` |
+| `apply-branch` | No | `main` | Branch whose pushes and manual runs apply the plan |
+| `tf-organization` | No | | HCP Terraform or Terraform Enterprise organization |
+| `tf-hostname` | No | `app.terraform.io` | HCP Terraform or Terraform Enterprise hostname |
+| `tf-workspace` | No | | HCP Terraform or Terraform Enterprise workspace |
+| `setup-python` | No | `false` | Install Python, for providers or modules that need it |
+| `python-version` | No | `3.13` | Python version |
+| `enable-github-modules` | No | `false` | Configure Git to download private modules with `github-token` |
+| `pr-comment` | No | `true` | Post the plan as a pull request comment |
+| `run-terraform-test` | No | `false` | Run `terraform test` with the plan role before the plan |
+| `role-duration-seconds` | No | `3600` | Session duration for the assumed IAM roles |
+| `ref` | No | | Deprecated and ignored |
+| `local-execution-mode` | No | `false` | Deprecated and ignored |
+
+## Secrets
+
+| Name | Description |
+|---|---|
+| `terraform-execution-iam-plan-role-arn` | IAM role for the plan job |
+| `terraform-execution-iam-apply-role-arn` | IAM role for the apply job |
+| `plan-encryption-key` | Passphrase that encrypts the saved plan. Required when a run on the apply branch has changes. |
+| `secret-tfvars` | Contents of a `.tfvars` file with sensitive variable values |
+| `tf-token` | HCP Terraform or Terraform Enterprise API token |
+| `github-token` | Token that can read private module repositories |
+| `extra-args` | Removed. The workflow fails if it's set. |
+
+## Security considerations
+
+- **Pull request comments.** Terraform redacts values marked `sensitive`, but the comment shows every other value in the plan. In a public repository, anyone can read it. Set `pr-comment: false` if the plan shows values that shouldn't be public.
+- **Saved plan artifact.** Anyone who can read the repository can download workflow artifacts. The workflow encrypts the saved plan with GnuPG (AES-256, with an integrity check) before uploading it, and the artifact expires after one day.
+- **Pinned actions.** Every action is pinned to a full commit SHA. Pin this workflow the same way in your callers.
+- **Least privilege.** Each job requests only the GitHub permissions it needs. The plan role has read-only access to resources, and the apply role's trust policy accepts only jobs that run in the protected environment on the apply branch.
+- **No values in scripts.** Inputs and secrets reach the scripts as environment variables. The workflow never expands them inside the script text, which prevents script injection.
+
+## Migrating from v1
+
+- Replace `extra-args` with `secret-tfvars`. Convert each `-var="name=value"` to a `name = "value"` line.
+- Add the `plan-encryption-key` secret.
+- Remove the `ref` and `local-execution-mode` inputs. They're ignored.
+- For HCP Terraform, `tf-organization`, `tf-hostname`, and `tf-workspace` are now optional, and `tf-hostname` also sets the token variable, so Terraform Enterprise works without editing the workflow.
+- Formatting and validation failures now fail the plan job.
+- The apply job applies the saved plan instead of planning again, and it no longer passes `-var-file` or `-var` options. Variable values come from the saved plan.
 
 ## Security
 

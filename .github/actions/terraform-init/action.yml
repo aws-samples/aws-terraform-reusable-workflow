@@ -1,53 +1,99 @@
 name: "Terraform Init"
-description: "Terraform Init Composite Action"
+description: "Installs Terraform, signs in to AWS and HCP Terraform when configured, and runs terraform init."
 inputs:
   tf-version:
     required: true
-    description: "Terraform Version"
+    description: "Terraform version to install"
   aws-region:
     required: true
     description: "AWS Region"
-  terraform-wrapper:
-    required: true
-    description: "Terraform Wrapper"
-  local-execution-mode:
-    required: false
-    description: "Terraform Cloud/Enterprise Workspace Local Execution Mode flag"
   terraform-execution-iam-role-arn:
     required: false
-    description: "Terraform Execution IAM Role ARN"
+    default: ""
+    description: "IAM role to assume through GitHub OIDC. Leave empty when HCP Terraform runs the plan remotely."
+  role-duration-seconds:
+    required: false
+    default: "3600"
+    description: "Session duration for the assumed IAM role"
   setup-python:
     required: false
-    description: "Python Setup flag"
+    default: "false"
+    description: "Install Python"
   python-version:
     required: false
-    description: "Python Version"
+    default: ""
+    description: "Python version"
+  enable-github-modules:
+    required: false
+    default: "false"
+    description: "Configure Git to download private modules from GitHub"
+  github-token:
+    required: false
+    default: ""
+    description: "Token that can read the private module repositories"
+  tf-organization:
+    required: false
+    default: ""
+    description: "HCP Terraform or Terraform Enterprise organization"
+  tf-hostname:
+    required: false
+    default: "app.terraform.io"
+    description: "HCP Terraform or Terraform Enterprise hostname"
+  tf-workspace:
+    required: false
+    default: ""
+    description: "HCP Terraform or Terraform Enterprise workspace"
+  tf-token:
+    required: false
+    default: ""
+    description: "HCP Terraform or Terraform Enterprise API token"
+  backend-config-file:
+    required: false
+    default: ""
+    description: "Backend configuration file passed to terraform init with -backend-config, if it exists"
 outputs:
   outcome:
-    description: "Terraform init command outcome"
+    description: "Outcome of terraform init"
     value: ${{ steps.init.outcome }}
 runs:
   using: "composite"
   steps:
     - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v4
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
       with:
         terraform_version: ${{ inputs.tf-version }}
-        terraform_wrapper: ${{ inputs.terraform-wrapper }}
+        terraform_wrapper: false
     - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v6
-      if: ${{ inputs.local-execution-mode == 'true' }}
+      if: ${{ inputs.terraform-execution-iam-role-arn != '' }}
+      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
       with:
         role-to-assume: ${{ inputs.terraform-execution-iam-role-arn }}
         role-session-name: terraform-execution-role
         aws-region: ${{ inputs.aws-region }}
-        role-duration-seconds: 1200
+        role-duration-seconds: ${{ inputs.role-duration-seconds }}
     - name: Setup Python
-      uses: actions/setup-python@v4
       if: ${{ inputs.setup-python == 'true' }}
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: ${{ inputs.python-version }}
+    - name: Configure Git for private GitHub modules
+      if: ${{ inputs.enable-github-modules == 'true' }}
+      shell: bash
+      env:
+        GITHUB_MODULES_TOKEN: ${{ inputs.github-token }}
+      run: |
+        if [[ -z "$GITHUB_MODULES_TOKEN" ]]; then
+          echo "::error::Set the github-token secret when enable-github-modules is true."
+          exit 1
+        fi
+        git config --global url."https://x-access-token:${GITHUB_MODULES_TOKEN}@github.com/".insteadOf "https://github.com/"
     - name: Terraform Init
       id: init
       shell: bash
-      run: terraform init
+      env:
+        TF_ORGANIZATION_INPUT: ${{ inputs.tf-organization }}
+        TF_HOSTNAME_INPUT: ${{ inputs.tf-hostname }}
+        TF_WORKSPACE_INPUT: ${{ inputs.tf-workspace }}
+        TF_TOKEN_INPUT: ${{ inputs.tf-token }}
+        BACKEND_CONFIG_FILE: ${{ inputs.backend-config-file }}
+      run: bash "$GITHUB_ACTION_PATH/init.sh"
