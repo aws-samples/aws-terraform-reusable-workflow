@@ -36,7 +36,7 @@ It supports the Amazon S3 backend with GitHub OIDC (the default), and HCP Terraf
 
 ## Requirements
 
-- Terraform 1.10 or later. Saved plans with the `cloud` block need 1.6, and ephemeral variables need 1.10.
+- Terraform 1.10 or later. Saved plans with the `cloud` block need 1.6, and ephemeral variables need 1.10. The S3 backend's native state locking (`use_lockfile`), which [Option 1](#option-1-s3-backend-with-github-oidc) uses, needs 1.11 or later.
 - A root module in the repository root with:
   - `envs/<environment>/terraform.tfvars` for each environment. The file can be empty.
   - Optionally, `envs/<environment>/backend.tfbackend` for each environment. When it exists, `terraform init` reads it with `-backend-config`. See [Option 1](#option-1-s3-backend-with-github-oidc).
@@ -103,7 +103,7 @@ In each AWS account:
    - `s3:ListBucket` on the bucket, `s3:GetObject` on the state key, and `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on `<key>.tflock`. A plan takes the state lock.
    - `kms:Decrypt`, plus `kms:Encrypt` and `kms:GenerateDataKey` for the lock file, on the state key's KMS key.
 
-   The plan job doesn't run in a GitHub environment, so its OIDC subject names the branch or the pull request. Trust both:
+   The plan job doesn't run in a GitHub environment, so its OIDC subject names the branch or the pull request. For an environment that you plan on pull requests (`dev` in the [deploy workflow](#deploy-workflow)), trust both:
 
    ```json
    "Condition": {
@@ -113,6 +113,17 @@ In each AWS account:
          "repo:my-org@123456/my-repo@456789:pull_request",
          "repo:my-org@123456/my-repo@456789:ref:refs/heads/main"
        ]
+     }
+   }
+   ```
+
+   For production, trust only the apply branch. A pull request can change the caller workflow, so this trust policy, not the caller job's `if` condition, is what keeps pull requests from using the production plan role (see [Security considerations](#security-considerations)):
+
+   ```json
+   "Condition": {
+     "StringEquals": {
+       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+       "token.actions.githubusercontent.com:sub": "repo:my-org@123456/my-repo@456789:ref:refs/heads/main"
      }
    }
    ```
@@ -129,7 +140,7 @@ In each AWS account:
    }
    ```
 
-Run IAM Access Analyzer [policy validation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-policy-validation.html) on both trust policies.
+Run IAM Access Analyzer [policy validation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access-analyzer-policy-validation.html) on each trust policy.
 
 ### GitHub repository
 
@@ -184,6 +195,7 @@ jobs:
   deploy-prod:
     name: Prod
     needs: deploy-dev
+    if: github.ref == 'refs/heads/main' # Don't plan production on pull requests
     uses: aws-samples/aws-terraform-reusable-workflow/.github/workflows/terraform-reusable.yml@<commit-sha> # v2.0.0
     with:
       deploy: true
@@ -195,6 +207,8 @@ jobs:
       terraform-execution-iam-apply-role-arn: ${{ secrets.PROD_AWS_APPLY_ROLE_ARN }}
       plan-encryption-key: ${{ secrets.PLAN_ENCRYPTION_KEY }}
 ```
+
+Pull requests plan only `dev`. The `if` condition on `deploy-prod` limits production to pushes and manual runs on `main`, and the production plan role's trust policy enforces it (see [AWS IAM](#aws-iam)).
 
 The caller must grant all four permissions. GitHub refuses to start a reusable workflow whose jobs request more permissions than the caller grants.
 
